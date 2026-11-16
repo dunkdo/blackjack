@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Casino entre amis</title>
+<style>
+  :root { --felt: #0d5c3a; --felt-dark: #083d27; --gold: #e8c26a; --text: #f4f1e8; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text);
+    background: radial-gradient(ellipse at center, var(--felt) 0%, var(--felt-dark) 100%);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 16px; gap: 28px;
+  }
+  h1 { font-family: Georgia, serif; color: var(--gold); letter-spacing: 3px; font-size: clamp(1.8rem, 6vw, 2.8rem); text-align: center; }
+  .sub { opacity: .75; text-align: center; margin-top: 6px; }
+  .bank { background: rgba(0,0,0,.3); padding: 6px 16px; border-radius: 20px; border: 1px solid var(--gold); }
+  .bank b { color: var(--gold); }
+  .games { display: grid; grid-template-columns: repeat(3, minmax(0, 280px)); gap: 20px; width: 100%; justify-content: center; }
+  .game {
+    display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; text-decoration: none; color: var(--text);
+    background: rgba(0,0,0,.28); border: 2px solid rgba(232,194,106,.4); border-radius: 18px; padding: 28px 20px;
+    transition: transform .15s, border-color .15s, box-shadow .15s;
+  }
+  .game:hover { transform: translateY(-4px); border-color: var(--gold); box-shadow: 0 10px 30px rgba(0,0,0,.4); }
+  .icon { font-size: 3.6rem; line-height: 1; }
+  .game h2 { font-family: Georgia, serif; color: var(--gold); font-size: 1.5rem; letter-spacing: 1px; }
+  .game p { font-size: .9rem; opacity: .8; line-height: 1.4; }
+  .play { margin-top: 4px; background: var(--gold); color: #222; font-weight: 700; padding: 10px 26px; border-radius: 8px; }
+  footer { font-size: .75rem; opacity: .55; text-align: center; }
+  @media (max-width: 900px) { .games { grid-template-columns: repeat(2, minmax(0, 280px)); } }
+  @media (max-width: 600px) { .games { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <div>
+    <h1>🎰 CASINO ENTRE AMIS</h1>
+    <p class="sub">Choisissez votre jeu · jusqu'à 4 joueurs en ligne</p>
+  </div>
+  <div class="bank">Votre banque : <b id="bank">1000</b> €</div>
+  <div class="games">
+    <a class="game" href="blackjack.html">
+      <div class="icon">🃏</div>
+      <h2>Blackjack</h2>
+      <p>Battez le croupier sans dépasser 21.<br>Le blackjack paie 3:2.</p>
+      <span class="play">Jouer</span>
+    </a>
+    <a class="game" href="course.html">
+      <div class="icon">🏁</div>
+      <h2>Course folle</h2>
+      <p>Pariez sur vos coureurs favoris.<br>Course 100 % aléatoire, gain = mise × cote.</p>
+      <span class="play">Jouer</span>
+    </a>
+    <a class="game" href="nombre.html">
+      <div class="icon">🎯</div>
+      <h2>Le Nombre Mystère</h2>
+      <p>Choisissez un nombre de 1 à 100.<br>Le plus proche du tirage rafle toutes les mises.</p>
+      <span class="play">Jouer</span>
+    </a>
+  </div>
+  <footer>Jeu gratuit, sans argent réel. Votre banque est partagée entre tous les jeux.</footer>
+<script>
+  try { const b = parseInt(localS

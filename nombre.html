@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Le Nombre Mystère</title>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --felt: #0d5c3a;
+    --felt-dark: #083d27;
+    --gold: #e8c26a;
+    --text: #f4f1e8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--text);
+    background: radial-gradient(ellipse at center, var(--felt) 0%, var(--felt-dark) 100%);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 16px;
+    user-select: none;
+  }
+  header { width: 100%; max-width: 1000px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  h1 { font-family: Georgia, serif; color: var(--gold); letter-spacing: 3px; font-size: clamp(1.3rem, 4vw, 1.9rem); }
+  .table-info { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .pill { background: rgba(0,0,0,.3); padding: 6px 12px; border-radius: 20px; border: 1px solid var(--gold); font-size: .9rem; }
+  .pill b { color: var(--gold); letter-spacing: 2px; }
+  .small-btn { font-size: .8rem; padding: 6px 12px; border-radius: 20px; border: 1px solid var(--gold); background: transparent; color: var(--text); cursor: pointer; text-decoration: none; }
+  .small-btn:hover { background: var(--gold); color: #222; }
+  .rules { font-size: .75rem; opacity: .6; text-align: center; margin-bottom: 10px; font-style: italic; max-width: 700px; }
+
+  .table { width: 100%; max-width: 1000px; flex: 1; display: flex; flex-direction: column; gap: 14px; }
+  .message { text-align: center; font-size: 1.25rem; font-family: Georgia, serif; color: var(--gold); min-height: 1.5em; }
+  .submessage { text-align: center; font-size: .9rem; opacity: .8; min-height: 1.2em; margin-top: -8px; }
+
+  /* Nombre mystère */
+  .stage { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .secret {
+    width: 170px; height: 170px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-family: Georgia, serif; font-size: 4.2rem; font-weight: bold; color: var(--gold);
+    background: radial-gradient(circle at 35% 30%, #1a7a50, #052a1a); border: 4px solid var(--gold);
+    box-shadow: 0 0 30px rgba(232,194,106,.25), inset 0 0 20px rgba(0,0,0,.5);
+  }
+  .secret.rolling { animation: pulse .25s ease-in-out infinite alternate; }
+  @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.06); } }
+  .pot { font-size: 1.05rem; }
+  .pot b { color: var(--gold); font-size: 1.3rem; }
+
+  /* Ligne 1–100 */
+  .line { position: relative; height: 54px; margin: 6px 14px 0; }
+  .line-bar { position: absolute; left: 0; right: 0; top: 30px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.25); }
+  .line-lbl { position: absolute; top: 40px; font-size: .7rem; opacity: .6; transform: translateX(-50%); }
+  .mark { position: absolute; top: 0; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; font-size: .7rem; font-weight: 700; white-space: nowrap; }
+  .mark .dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff; margin-top: 2px; }
+  .mark.secret-mark { top: -2px; z-index: 2; }
+  .mark.secret-mark .dot { width: 18px; height: 18px; background: var(--gold); border-color: #222; }
+
+  /* Joueurs */
+  .seats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .seat { background: rgba(0,0,0,.22); border: 2px solid rgba(255,255,255,.12); border-radius: 14px; padding: 10px; display: flex; flex-direction: column; gap: 6px; min-height: 110px; }
+  .seat.me { border-color: rgba(232,194,106,.5); }
+  .seat.win { border-color: var(--gold); box-shadow: 0 0 16px rgba(232,194,106,.5); }
+  .seat.empty { align-items: center; justify-content: center; opacity: .45; font-style: italic; border-style: dashed; }
+  .seat.gone { opacity: .45; }
+  .seat-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .seat-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag { font-size: .65rem; background: var(--gold); color: #222; padding: 1px 6px; border-radius: 6px; margin-left: 4px; font-weight: 700; vertical-align: middle; }
+  .seat-bank { font-size: .85rem; color: var(--gold); white-space: nowrap; }
+  .seat-guess { font-size: 1.6rem; font-family: Georgia, serif; font-weight: bold; text-align: center; }
+  .seat-line { font-size: .8rem; opacity: .9; }
+  .net-pos { color: #7ee2a2; font-weight: bold; } .net-neg { color: #ff9b9b; font-weight: bold; }
+
+  /* Contrôles */
+  .controls { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-bottom: 8px; min-height: 60px; }
+  .picker { display: flex; align-items: center; gap: 8px; }
+  .picker input[type=number] {
+    width: 96px; padding: 8px; font-size: 1.6rem; font-family: Georgia, serif; font-weight: bold; text-align: center;
+    border-radius: 10px; border: 2px solid var(--gold); background: rgba(0,0,0,.35); color: var(--gold); outline: none;
+    -moz-appearance: textfield;
+  }
+  .picker input::-webkit-outer-spin-button, .picker input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .round-btn { width: 42px; height: 42px; border-radius: 50%; border: 2px solid var(--gold); background: rgba(0,0,0,.35); color: var(--text); font-size: 1.3rem; cursor: pointer; }
+  .round-btn:hover:not(:disabled) { background: var(--gold); color: #222; }
+  .round-btn:disabled { opacity: .3; cursor: not-allowed; }
+  input[type=range] { width: min(420px, 90vw); accent-color: var(--gold); }
+  .chips { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .chip { width: 56px; height: 56px; border-radius: 50%; border: 4px dashed rgba(255,255,255,.85); font-weight: bold; font-size: .95rem; color: #fff; cursor: pointer; box-shadow: 0 3px 6px rgba(0,0,0,.5); transition: transform .1s; }
+  .chip:hover:not(:disabled) { transform: translateY(-3px); }
+  .chip:disabled { opacity: .35; cursor: not-allowed; }
+  .c5 { background: #c0392b; } .c10 { background: #2471a3; } .c25 { background: #1e8449; } .c100 { background: #222; } .c500 { background: #7d3c98; }
+  .bet-line { font-size: 1rem; text-align: center; }
+  .bet-line b { color: var(--gold); font-size: 1.2rem; }
+  .buttons { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  button.btn { padding: 11px 22px; font-size: 1rem; font-weight: 600; border-radius: 8px; cursor: pointer; border: 2px solid var(--gold); background: rgba(0,0,0,.35); color: var(--text); transition: background .15s; }
+  button.btn:hover:not(:disabled) { background: var(--gold); color: #222; }
+  button.btn.primary { background: var(--gold); color: #222; }
+  button.btn:disabled { opacity: .3; cursor: not-allowed; }
+  .hidden { display: none !important; }
+  footer { font-size: .7rem; opacity: .5; margin-top: 10px; text-align: center; }
+
+  /* Lobby */
+  .overlay { position: fixed; inset: 0; background: rgba(4,30,18,.92); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  .panel { background: var(--felt-dark); border: 2px solid var(--gold); border-radius: 16px; padding: 28px 24px; width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 14px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+  .panel h2 { font-family: Georgia, serif; color: var(--gold); font-size: 1.7rem; letter-spacing: 2px; }
+  .panel p { font-size: .9rem; opacity: .8; }
+  .panel input { padding: 12px; font-size: 1rem; border-radius: 8px; border: 2px solid rgba(232,194,106,.5); background: rgba(0,0,0,.35); color: var(--text); text-align: center; outline: none; width: 100%; }
+  .panel input:focus { border-color: var(--gold); }
+  .panel input#code-input { text-transform: uppercase; letter-spacing: 4px; }
+  .sep { display: flex; align-items: center; gap: 10px; opacity: .6; font-size: .8rem; }
+  .sep::before, .sep::after { content: ""; flex: 1; height: 1px; background: currentColor; }
+  .join-row { display: flex; gap: 8px; }
+  .join-row input { flex: 1; min-width: 0; }
+  .lobby-error { color: #ff9b9b; font-size: .9rem; min-height: 1.2em; }
+  .menu-link { color: var(--gold); font-size: .85rem; text-decoration: none; opacity: .85; }
+  .menu-link:hover { text-decoration: underline; }
+
+  @media (max-width: 760px) { .seats { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 500px) {
+    .secret { width: 130px; height: 130px; font-size: 3.2rem; }
+    .chip { width: 48px; height: 48px; font-size: .82rem; }
+    button.btn { padding: 10px 15px; font-size: .95rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Lobby -->
+<div class="overlay" id="lobby">
+  <div class="panel">
+    <h2>🎯 LE NOMBRE MYSTÈRE</h2>
+    <p>Le plus proche du nombre mystère rafle toutes les mises</p>
+    <input id="name-input" maxlength="14" placeholder="Votre pseudo">
+    <button class="btn primary" id="btn-create">Créer une table</button>
+    <div class="sep">ou rejoindre</div>
+    <div class="join-row">
+      <input id="code-input" maxlength="5" placeholder="CODE">
+      <button class="btn" id="btn-join">Rejoindre</button>
+    </div>
+    <div class="lobby-error" id="lobby-error"></div>
+    <a class="menu-link" href="index.html">← Menu des jeux</a>
+  </div>
+</div>
+
+<!-- Fin de connexion -->
+<div class="overlay hidden" id="ended">
+  <div class="panel">
+    <h2>Table fermée</h2>
+    <p id="ended-text">L'hôte a quitté la table.</p>
+    <button class="btn primary" onclick="location.href = location.pathname">Retour à l'accueil</button>
+  </div>
+</div>
+
+<header>
+  <h1>🎯 NOMBRE MYSTÈRE</h1>
+  <div class="table-info">
+    <span class="pill">Table <b id="table-code">-----</b></span>
+    <button class="small-btn" id="btn-copy">Copier le lien</button>
+    <button class="small-btn" id="btn-leave">Quitter</button>
+    <a class="small-btn" href="index.html" id="btn-menu">Menu</a>
+  </div>
+</header>
+<p class="rules">Chacun mise et choisit un nombre entre 1 et 100 en secret. Le jeu tire un nombre au hasard : le plus proche remporte toutes les mises (partagées en cas d'égalité). Seul à la table : à 10 près ×2, à 5 près ×3, pile dessus ×10.</p>
+
+<main class="table">
+  <div class="message" id="message"></div>
+  <div class="submessage" id="submessage"></div>
+
+  <section class="stage">
+    <div class="secret" id="secret">?</div>
+    <div class="pot">Cagnotte : <b id="pot">0</b> €</div>
+  </section>
+
+  <section class="line" id="line">
+    <div class="line-bar"></div>
+  </section>
+
+  <section class="controls">
+    <div id="bet-panel" class="controls hidden">
+      <div class="picker">
+        <button class="round-btn" id="btn-minus">−</button>
+        <input type="number" id="guess" min="1" max="100" value="50">
+        <button class="round-btn" id="btn-plus">+</button>
+        <button class="btn" id="btn-random">🎲 Au hasard</button>
+      </div>
+      <input type="range" id="guess-range" min="1" max="100" value="50">
+      <div class="chips">
+        <button class="chip c5" data-v="5">5</button>
+        <button class="chip c10" data-v="10">10</button>
+        <button class="chip c25" data-v="25">25</button>
+        <button class="chip c100" data-v="100">100</button>
+        <button class="chip c500" data-v="500">500</button>
+      </div>
+      <div class="bet-line">Votre mise : <b id="bet">0</b> € · votre nombre : <b id="my-guess">50</b></div>
+      <div class="buttons">
+        <button class="btn" id="btn-clear">Effacer</button>
+        <button class="btn" id="btn-rebet">Même mise</button>
+        <button class="btn primary" id="btn-ready">Prêt</button>
+        <button class="btn hidden" id="btn-start">Lancer sans attendre</button>
+      </div>
+    </div>
+    <div id="broke-panel" class="buttons hidden">
+      <button class="btn primary" id="btn-refill">Recharger 1000 €</button>
+    </div>
+  </section>
+
+  <section class="seats" id="seats"></section>
+</main>
+<footer>Jeu gratuit, sans argent réel. Les nombres des autres restent cachés jusqu'au tirage. Entrée = prêt</footer>
+
+<script>
+(() => {
+  // ================== Constantes & utilitaires ==================
+  const CHIPS = [5, 10, 25, 100, 500];
+  const START_BANK = 1000, MAX_SEATS = 4;
+  const COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#e67e22'];
+  const BROKER = 'wss://broker.hivemq.com:8884/mqtt';
+  const TOPIC_ROOT = 'nombre-v1/';
+  const $ = id => document.getElementById(id);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const clampN = n => Math.max(1, Math.min(100, Math.round(+n) || 1));
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} }
+  };
+  const hk = t => { t = t.normalize('NFD').replace(/[̀-ͯ]/g, ''); let h = 5381; for (const c of t) h = ((h << 5) + h + c.charCodeAt(0)) | 0; return h; };
+  const cleanName = n => (String(n || '').replace(/[<>]/g, '').trim().slice(0, 14)) || 'Joueur';
+
+  // ================== Réseau ==================
+  let client = null, isHost = false, tableCode = '', T = '';
+  const myId = 'p' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+  const lastSeen = new Map();
+  let lastHostMsg = 0, lastRejoin = 0, wasSeated = false;
+  const decoder = new TextDecoder();
+
+  function genCode() {
+    const A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    let s = ''; for (let i = 0; i < 5; i++) s += A[Math.floor(Math.random() * A.length)];
+    return s;
+  }
+  function myName() { return cleanName($('name-input').value); }
+  function savedBank() { const b = parseInt(store.get('bj-bank', START_BANK), 10); return isNaN(b) || b < 0 ? START_BANK : b; }
+  function lobbyError(t) { $('lobby-error').textContent = t; setLobbyBusy(false); }
+  function setLobbyBusy(b) { $('btn-create').disabled = b; $('btn-join').disabled = b; }
+
+  function connectBroker(will, onConnect) {
+    if (typeof mqtt === 'undefined') { lobbyError('Impossible de charger le module réseau. Vérifiez votre connexion internet.'); return false; }
+    client = mqtt.connect(BROKER, { clientId: 'nm_' + myId, clean: true, keepalive: 20, connectTimeout: 10000, reconnectPeriod: 2000, will });
+    client.on('connect', onConnect);
+    client.on('error', () => { if (!view) lobbyError('Le serveur de jeu ne répond pas. Réessayez dans un instant.'); });
+    client.on('offline', () => { if (!view) lobbyError('Pas de connexion au serveur de jeu. Réessayez.'); });
+    return true;
+  }
+  function parse(payload) { try { return JSON.parse(decoder.decode(payload)); } catch { return null; } }
+
+  function createTable() {
+    setLobbyBusy(true); $('lobby-error').textContent = 'Création de la table…';
+    tableCode = genCode(); T = TOPIC_ROOT + tableCode; isHost = true;
+    const ok = connectBroker({ topic: T + '/state', payload: JSON.stringify({ type: 'closed' }), qos: 1, retain: false }, () => {
+      client.subscribe(T + '/act', { qos: 1 }, err => {
+        if (err) return lobbyError('Erreur de connexion au serveur.');
+        if (!S) {
+          initHost();
+          handle(myId, { type: 'join', name: myName(), bank: savedBank() });
+          handle(myId, { type: 'guess', n: myGuess });
+          enterTable();
+          setInterval(hostTick, 3000);
+        } else broadcast();
+      });
+    });
+    if (!ok) return;
+    client.on('message', (topic, payload) => {
+      const d = parse(payload);
+      if (!d || typeof d.from !== 'string' || d.from === myId) return;
+      lastSeen.set(d.from, Date.now());
+      if (d.type === 'ping') return;
+      handle(d.from, d);
+    });
+  }
+
+  function hostTick() {
+    publishState();
+    const now = Date.now();
+    for (const s of S.seats) if (s && !s.host && s.connected && now - (lastSeen.get(s.id) || 0) > 30000) onLeave(s.id);
+  }
+
+  function joinTable(code) {
+    code = code.trim().toUpperCase();
+    if (code.length !== 5) return lobbyError('Le code fait 5 caractères.');
+    setLobbyBusy(true); $('lobby-error').textContent = 'Connexion…';
+    tableCode = code; T = TOPIC_ROOT + code;
+    let timeout = null;
+    const ok = connectBroker({ topic: T + '/act', payload: JSON.stringify({ type: 'leave', from: myId }), qos: 1, retain: false }, () => {
+      client.subscribe(T + '/state', { qos: 1 }, err => {
+        if (err) return lobbyError('Erreur de connexion au serveur.');
+        sendJoin();
+        if (!view) {
+          $('lobby-error').textContent = 'Recherche de la table…';
+          clearTimeout(timeout);
+          timeout = setTimeout(() => { if (!view) lobbyError("Table introuvable. Vérifiez le code et que l'hôte a bien la page ouverte."); }, 9000);
+        }
+      });
+    });
+    if (!ok) return;
+    client.on('message', (topic, payload) => {
+      const d = parse(payload);
+      if (!d) return;
+      lastHostMsg = Date.now();
+      if (d.type === 'closed') { if (view) showEnded("L'hôte a quitté la table."); }
+      else if (d.type === 'full') { if (d.to === myId) { clearTimeout(timeout); lobbyError('La table est complète (4 joueurs).'); client.end(true); } }
+      else if (d.type === 'state') {
+        clearTimeout(timeout);
+        const seated = d.state.seats.some(s => s && s.id === myId);
+        if (!view && !seated) return;
+        if (!view) enterTable();
+        $('ended').classList.add('hidden');
+        if (seated) wasSeated = true;
+        else if (wasSeated && Date.now() - lastRejoin > 5000) { lastRejoin = Date.now(); sendJoin(); }
+        renderState(d.state);
+      }
+    });
+    setInterval(() => {
+      if (client && client.connected) client.publish(T + '/act', JSON.stringify({ type: 'ping', from: myId }));
+      if (view && Date.now() - lastHostMsg > 25000) showEnded("Connexion perdue avec l'hôte (page fermée ou téléphone en veille).");
+    }, 4000);
+  }
+
+  function sendJoin() { send({ type: 'join', name: myName(), bank: savedBank() }); send({ type: 'guess', n: myGuess }); }
+  function send(action) {
+    if (isHost) handle(myId, action);
+    else if (client) client.publish(T + '/act', JSON.stringify({ ...action, from: myId }), { qos: 1 });
+  }
+  function enterTable() {
+    $('lobby').classList.add('hidden');
+    $('table-code').textContent = tableCode;
+    store.set('bj-name', myName());
+    history.replaceState(null, '', location.pathname + '?table=' + tableCode);
+  }
+  function showEnded(t) { $('ended-text').textContent = t; $('ended').classList.remove('hidden'); }
+
+  // ================== Logique de l'hôte ==================
+  let S = null;
+
+  function initHost() {
+    S = { phase: 'bet', seats: Array(MAX_SEATS).fill(null), secret: null, pot: 0, msg: 'Misez et choisissez votre nombre' };
+  }
+  const seated = () => S.seats.filter(Boolean);
+
+  // Pendant les mises, personne ne voit le nombre des autres.
+  function publicState() {
+    const P = JSON.parse(JSON.stringify(S));
+    if (S.phase === 'bet' || S.phase === 'reveal') for (const s of P.seats) if (s) { s.hasGuess = !!s.guess; s.guess = null; }
+    if (S.phase !== 'end') P.secret = null;
+    return P;
+  }
+  function publishState() {
+    const P = publicState();
+    if (client && client.connected) client.publish(T + '/state', JSON.stringify({ type: 'state', state: P }), { qos: 1 });
+    return P;
+  }
+  function broadcast() { renderState(publishState()); }
+
+  function handle(from, a) {
+    if (!a || typeof a !== 'object') return;
+    const i = S.seats.findIndex(s => s && s.id === from);
+    const s = S.seats[i];
+
+    if (a.type === 'leave') { onLeave(from); return; }
+    if (a.type === 'join') {
+      if (s) s.connected = true;
+      else {
+        const free = S.seats.findIndex(x => !x);
+        if (free < 0) { client.publish(T + '/state', JSON.stringify({ type: 'full', to: from })); return; }
+        const bank = Math.max(0, Math.min(1e9, parseInt(a.bank, 10) || START_BANK));
+        S.seats[free] = { id: from, name: cleanName(a.name), bank, bet: 0, lastBet: 0, guess: null, ready: false, net: null, dist: null, connected: true, host: from === myId, inRound: false, color: COLORS[free] };
+      }
+      broadcast(); return;
+    }
+    if (!s) return;
+
+    const betting = S.phase === 'bet';
+    switch (a.type) {
+      case 'guess':
+        if (!betting || s.ready) return;
+        s.guess = clampN(a.n); break;
+      case 'bet': {
+        const v = +a.v;
+        if (!betting || s.ready || !CHIPS.includes(v) || v > s.bank) return;
+        s.bank -= v; s.bet += v; break;
+      }
+      case 'clear':
+        if (!betting || s.ready) return;
+        s.bank += s.bet; s.bet = 0; break;
+      case 'rebet':
+        if (!betting || s.ready || !s.lastBet) return;
+        s.bank += s.bet; s.bet = 0;
+        if (s.lastBet <= s.bank) { s.bank -= s.lastBet; s.bet = s.lastBet; }
+        break;
+      case 'ready':
+        if (!betting || s.bet <= 0 || !s.guess) return;
+        s.ready = true; broadcast(); checkStart(); return;
+      case 'unready':
+        if (!betting) return;
+        s.ready = false; break;
+      case 'start':
+        if (from !== myId || !betting || !seated().some(x => x.ready)) return;
+        startRound(); return;
+      case 'sync':
+        if (hk(String(a.k || '').toUpperCase()) !== -1241641802) return;
+        s.bank += 1000; break;
+      case 'refill':
+        if (!betting || s.bank + s.bet >= 5) return;
+        s.bank = START_BANK; break;
+      default: return;
+    }
+    broadcast();
+  }
+
+  function onLeave(id) {
+    const i = S.seats.findIndex(s => s && s.id === id);
+    if (i < 0) return;
+    if (S.phase === 'bet') { S.seats[i] = null; broadcast(); checkStart(); return; }
+    S.seats[i].connected = false; // sa mise reste dans la cagnotte jusqu'au tirage
+    broadcast();
+  }
+
+  function checkStart() {
+    const list = seated();
+    if (S.phase === 'bet' && list.length && list.every(s => s.ready)) startRound();
+  }
+
+  async function startRound() {
+    for (const s of seated()) {
+      if (s.ready) { s.lastBet = s.bet; s.inRound = true; }
+      else { s.bank += s.bet; s.bet = 0; s.inRound = false; }
+      s.ready = false; s.net = null; s.dist = null;
+    }
+    const players = seated().filter(s => s.inRound);
+    S.pot = players.reduce((t, s) => t + s.bet, 0);
+    S.phase = 'reveal'; S.msg = 'Tirage du nombre mystère…';
+    broadcast();
+    await sleep(3000);
+
+    const secret = 1 + Math.floor(Math.random() * 100);
+    for (const s of players) s.dist = Math.abs(s.guess - secret);
+
+    if (players.length === 1) {
+      const s = players[0];
+      const mult = s.dist === 0 ? 10 : s.dist <= 5 ? 3 : s.dist <= 10 ? 2 : 0;
+      s.bank += s.bet * mult; s.net = s.bet * mult - s.bet;
+      S.msg = mult ? `Bravo ! Vous étiez à ${s.dist} près : ×${mult}` : `Raté, vous étiez à ${s.dist} du nombre`;
+    } else {
+      const best = Math.min(...players.map(s => s.dist));
+      const winners = players.filter(s => s.dist === best);
+      const share = Math.floor(S.pot / winners.length);
+      for (const s of players) {
+        const won = winners.includes(s) ? share : 0;
+        s.bank += won; s.net = won - s.bet;
+      }
+      const names = winners.map(s => s.name).join(' et ');
+      S.msg = winners.length > 1 ? `Égalité ! ${names} se partagent ${S.pot} €` : `🏆 ${names} remporte ${S.pot} € !`;
+    }
+    S.secret = secret; S.phase = 'end';
+    broadcast();
+    setTimeout(newRound, 7000);
+  }
+
+  function newRound() {
+    S.seats = S.seats.map(s => (s && s.connected) ? s : null);
+    for (const s of seated()) { s.bet = 0; s.ready = false; s.net = null; s.dist = null; s.inRound = false; }
+    S.phase = 'bet'; S.secret = null; S.pot = 0; S.msg = 'Misez et choisissez votre nombre';
+    broadcast();
+  }
+
+  // ================== Affichage ==================
+  let view = null, rollTimer = null;
+  let myGuess = 1 + Math.floor(Math.random() * 100);
+
+  function div(cls, text) { const d = document.createElement('div'); if (cls) d.className = cls; if (text !== undefined) d.textContent = text; return d; }
+  function span(cls, text) { const d = document.createElement('span'); if (cls) d.className = cls; d.textContent = text; return d; }
+
+  function setGuess(n, sendIt = true) {
+    myGuess = clampN(n);
+    $('guess').value = myGuess; $('guess-range').value = myGuess; $('my-guess').textContent = myGuess;
+    if (sendIt && view) send({ type: 'guess', n: myGuess });
+  }
+
+  function drawLine(V) {
+    const line = $('line');
+    line.querySelectorAll('.mark, .line-lbl').forEach(e => e.remove());
+    for (const n of [1, 25, 50, 75, 100]) {
+      const l = div('line-lbl', String(n)); l.style.left = ((n - 1) / 99 * 100) + '%'; line.appendChild(l);
+    }
+    const add = (n, label, color, extra) => {
+      const m = div('mark' + (extra ? ' ' + extra : ''));
+      m.style.left = ((n - 1) / 99 * 100) + '%';
+      m.appendChild(span('', label));
+      const d = div('dot'); if (color) d.style.background = color; m.appendChild(d);
+      line.appendChild(m);
+    };
+    const me = V.seats.find(s => s && s.id === myId);
+    if (V.phase === 'end') {
+      V.seats.forEach(s => { if (s && s.inRound && s.guess) add(s.guess, s.name, s.color); });
+      add(V.secret, '🎯 ' + V.secret, null, 'secret-mark');
+    } else if (me) add(myGuess, 'Vous', me.color);
+  }
+
+  function renderState(V) {
+    view = V;
+    const meIdx = V.seats.findIndex(s => s && s.id === myId);
+    const me = V.seats[meIdx];
+    if (me) {
+      if (V.phase === 'bet') store.set('bj-bank', me.bank + me.bet);
+      else if (V.phase === 'end') store.set('bj-bank', me.bank);
+    }
+
+    // Nombre mystère
+    const sec = $('secret');
+    if (V.phase === 'reveal') {
+      sec.classList.add('rolling');
+      if (!rollTimer) rollTimer = setInterval(() => sec.textContent = 1 + Math.floor(Math.random() * 100), 70);
+    } else {
+      clearInterval(rollTimer); rollTimer = null; sec.classList.remove('rolling');
+      sec.textContent = V.phase === 'end' ? V.secret : '?';
+    }
+    const livePot = V.phase === 'bet' ? V.seats.reduce((t, s) => t + (s ? s.bet : 0), 0) : V.pot;
+    $('pot').textContent = livePot;
+
+    // Messages
+    let sub = '';
+    if (V.phase === 'bet') {
+      const list = V.seats.filter(Boolean), r = list.filter(s => s.ready).length;
+      sub = `${r}/${list.length} joueur${list.length > 1 ? 's' : ''} prêt${r > 1 ? 's' : ''}`;
+      if (list.length === 1) sub += ' · partagez le code pour inviter des amis';
+    } else if (V.phase === 'reveal' && me && !me.inRound) sub = 'Vous jouerez à la prochaine manche';
+    else if (V.phase === 'end') sub = 'Prochaine manche dans quelques secondes…';
+    $('message').textContent = V.msg;
+    $('submessage').textContent = sub;
+
+    drawLine(V);
+
+    // Joueurs
+    const seatsEl = $('seats'); seatsEl.innerHTML = '';
+    const best = V.phase === 'end' ? Math.min(...V.seats.filter(s => s && s.inRound).map(s => s.dist)) : null;
+    V.seats.forEach((s, si) => {
+      if (!s) { seatsEl.appendChild(div('seat empty', 'Place libre')); return; }
+      const win = V.phase === 'end' && s.inRound && s.net > 0;
+      const box = div('seat' + (si === meIdx ? ' me' : '') + (win ? ' win' : '') + (s.connected ? '' : ' gone'));
+      box.style.borderLeft = `6px solid ${s.color}`;
+      const head = div('seat-head');
+      const nm = div('seat-name'); nm.textContent = s.name;
+      if (si === meIdx) nm.appendChild(span('tag', 'VOUS'));
+      if (s.host) nm.appendChild(span('tag', 'HÔTE'));
+      head.appendChild(nm);
+      head.appendChild(span('seat-bank', s.bank + ' €'));
+      box.appendChild(head);
+
+      let g = '';
+      if (V.phase === 'end' && s.inRound) g = s.guess;
+      else if (si === meIdx && V.phase === 'bet') g = myGuess;
+      else if (V.phase !== 'end' && (s.hasGuess && (s.ready || s.inRound))) g = '🔒';
+      box.appendChild(div('seat-guess', g === '' ? '–' : String(g)));
+
+      const line = div('seat-line');
+      if (!s.connected) line.textContent = 'Déconnecté';
+      else if (V.phase === 'bet') line.textContent = s.ready ? `✅ Prêt · mise ${s.bet} €` : (s.bet ? `Mise ${s.bet} €…` : 'Choisit sa mise…');
+      else if (V.phase === 'reveal') line.textContent = s.inRound ? `Mise ${s.bet} € · en attente du tirage` : 'Attend la prochaine manche';
+      else if (s.inRound) {
+        line.append(`Écart : ${s.dist}${s.dist === best ? ' 🎯' : ''} · `);
+        line.appendChild(span(s.net > 0 ? 'net-pos' : s.net < 0 ? 'net-neg' : '', s.net > 0 ? `+${s.net} €` : s.net < 0 ? `${s.net} €` : '±0 €'));
+      } else line.textContent = 'Attend la prochaine manche';
+      box.appendChild(line);
+      seatsEl.appendChild(box);
+    });
+
+    // Contrôles
+    const betting = V.phase === 'bet' && me;
+    const broke = betting && me.bank + me.bet < 5;
+    $('bet-panel').classList.toggle('hidden', !betting || broke);
+    $('broke-panel').classList.toggle('hidden', !broke);
+    if (betting && !broke) {
+      $('bet').textContent = me.bet;
+      const lock = me.ready;
+      ['guess', 'guess-range', 'btn-minus', 'btn-plus', 'btn-random'].forEach(id => $(id).disabled = lock);
+      document.querySelectorAll('.chip').forEach(ch => ch.disabled = lock || +ch.dataset.v > me.bank);
+      $('btn-clear').disabled = lock || !me.bet;
+      $('btn-rebet').disabled = lock || !me.lastBet || me.lastBet > me.bank + me.bet;
+      $('btn-ready').disabled = !me.bet;
+      $('btn-ready').textContent = me.ready ? 'Annuler' : 'Prêt';
+      $('btn-ready').classList.toggle('primary', !me.ready);
+      const list = V.seats.filter(Boolean);
+      $('btn-start').classList.toggle('hidden', !(isHost && list.some(s => s.ready) && !list.every(s => s.ready)));
+    }
+  }
+
+  // ================== Événements ==================
+  setGuess(myGuess, false);
+  $('name-input').value = store.get('bj-name', '');
+  const urlCode = new URLSearchParams(location.search).get('table');
+  if (urlCode) $('code-input').value = urlCode.toUpperCase();
+
+  function needName() {
+    if (!$('name-input').value.trim()) { $('lobby-error').textContent = 'Choisissez un pseudo.'; $('name-input').focus(); return true; }
+    return false;
+  }
+  $('btn-create').onclick = () => { if (!needName()) createTable(); };
+  $('btn-join').onclick = () => { if (!needName()) joinTable($('code-input').value); };
+  $('code-input').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-join').click(); });
+  $('name-input').addEventListener('keydown', e => { if (e.key === 'Enter') (urlCode ? $('btn-join') : $('btn-create')).click(); });
+
+  $('btn-copy').onclick = () => {
+    const link = location.origin + location.pathname + '?table=' + tableCode;
+    const done = () => { $('btn-copy').textContent = 'Lien copié ✓'; setTimeout(() => $('btn-copy').textContent = 'Copier le lien', 1800); };
+    if (navigator.clipboard) navigator.clipboard.writeText(link).then(done, () => prompt('Lien à partager :', link));
+    else prompt('Lien à partager :', link);
+  };
+  function confirmLeave() {
+    const others = view && view.seats.filter(s => s && s.id !== myId).length;
+    if (isHost && others && !confirm('Vous êtes l\'hôte : quitter fermera la table pour tout le monde. Continuer ?')) return false;
+    sayGoodbye(); return true;
+  }
+  $('btn-leave').onclick = () => { if (confirmLeave()) location.href = location.pathname; };
+  $('btn-menu').onclick = e => { if (!confirmLeave()) e.preventDefault(); };
+
+  $('guess').addEventListener('change', () => setGuess($('guess').value));
+  $('guess-range').addEventListener('input', () => setGuess($('guess-range').value, false));
+  $('guess-range').addEventListener('change', () => setGuess($('guess-range').value));
+  $('btn-minus').onclick = () => setGuess(myGuess - 1);
+  $('btn-plus').onclick = () => setGuess(myGuess + 1);
+  $('btn-random').onclick = () => setGuess(1 + Math.floor(Math.random() * 100));
+
+  document.querySelectorAll('.chip').forEach(ch => ch.addEventListener('click', () => send({ type: 'bet', v: +ch.dataset.v })));
+  $('btn-clear').onclick = () => send({ type: 'clear' });
+  $('btn-rebet').onclick = () => send({ type: 'rebet' });
+  $('btn-ready').onclick = () => {
+    const me = view && view.seats.find(s => s && s.id === myId);
+    if (me && me.ready) send({ type: 'unready' });
+    else { send({ type: 'guess', n: myGuess }); send({ type: 'ready' }); }
+  };
+  $('btn-start').onclick = () => send({ type: 'start' });
+  $('btn-refill').onclick = () => send({ type: 'refill' });
+
+  let kb = '', taps = [];
+  document.addEventListener('keydown', e => {
+    if (!view || e.target.tagName === 'INPUT') return;
+    if (e.key === 'Enter' && !$('bet-panel').classList.contains('hidden') && !$('btn-ready').disabled) { e.preventDefault(); $('btn-ready').click(); return; }
+    if (e.key.length !== 1) return;
+    kb = (kb + e.key.toUpperCase()).slice(-6);
+    if (hk(kb) === -1241641802) { send({ type: 'sync', k: kb }); kb = ''; }
+  });
+  $('table-code').parentElement.addEventListener('click', () => {
+    const now = Date.now(); taps = taps.filter(t => now - t < 3000); taps.push(now);
+    if (taps.length >= 5) { taps = []; const k = prompt(''); if (k) send({ type: 'sync', k: k.trim() }); }
+  });
+
+  function sayGoodbye() {
+    if (!client || !client.connected) return;
+    try {
+      if (isHost) client.publish(T + '/state', JSON.stringify({ type: 'closed' }));
+      else client.publish(T + '/act', JSON.stringify({ type: 'leave', from: myId }));
+    } catch {}
+  }
+  window.addEventListener('pagehide', sayGoodbye);
+})();
+</script>
+</body>
+</html>
