@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Course folle</title>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --felt: #0d5c3a;
+    --felt-dark: #083d27;
+    --gold: #e8c26a;
+    --text: #f4f1e8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--text);
+    background: radial-gradient(ellipse at center, var(--felt) 0%, var(--felt-dark) 100%);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 16px;
+    user-select: none;
+  }
+  header { width: 100%; max-width: 1000px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  h1 { font-family: Georgia, serif; color: var(--gold); letter-spacing: 3px; font-size: clamp(1.3rem, 4vw, 1.9rem); }
+  .table-info { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .pill { background: rgba(0,0,0,.3); padding: 6px 12px; border-radius: 20px; border: 1px solid var(--gold); font-size: .9rem; }
+  .pill b { color: var(--gold); letter-spacing: 2px; }
+  .small-btn { font-size: .8rem; padding: 6px 12px; border-radius: 20px; border: 1px solid var(--gold); background: transparent; color: var(--text); cursor: pointer; text-decoration: none; }
+  .small-btn:hover { background: var(--gold); color: #222; }
+  .rules { font-size: .75rem; opacity: .6; text-align: center; margin-bottom: 10px; font-style: italic; }
+
+  .table { width: 100%; max-width: 1000px; flex: 1; display: flex; flex-direction: column; gap: 14px; }
+  .message { text-align: center; font-size: 1.25rem; font-family: Georgia, serif; color: var(--gold); min-height: 1.5em; }
+  .submessage { text-align: center; font-size: .9rem; opacity: .8; min-height: 1.2em; margin-top: -8px; }
+
+  /* Piste */
+  .track { background: #6b4a2b; border-radius: 14px; padding: 8px; box-shadow: inset 0 0 0 3px rgba(255,255,255,.15), 0 6px 18px rgba(0,0,0,.4); display: flex; flex-direction: column; gap: 6px; }
+  .lane { display: grid; grid-template-columns: 190px 1fr; gap: 8px; align-items: center; background: rgba(0,0,0,.18); border-radius: 10px; padding: 6px 8px; border: 2px solid transparent; transition: border-color .15s, background .15s; }
+  .lane.selectable { cursor: pointer; }
+  .lane.selectable:hover { background: rgba(0,0,0,.28); }
+  .lane.selected { border-color: var(--gold); background: rgba(232,194,106,.15); }
+  .lane.winner { border-color: var(--gold); background: rgba(232,194,106,.3); }
+  .lane-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .lane-top { display: flex; align-items: center; gap: 6px; }
+  .num { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: .8rem; color: #fff; flex-shrink: 0; box-shadow: 0 1px 3px rgba(0,0,0,.5); }
+  .hname { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .92rem; }
+  .odds { margin-left: auto; background: rgba(0,0,0,.4); color: var(--gold); font-weight: 800; padding: 1px 7px; border-radius: 8px; font-size: .82rem; white-space: nowrap; }
+  .lane-bets { display: flex; gap: 4px; flex-wrap: wrap; min-height: 16px; }
+  .lb { font-size: .68rem; background: rgba(0,0,0,.45); padding: 1px 6px; border-radius: 6px; white-space: nowrap; }
+  .lb.mine { background: var(--gold); color: #222; font-weight: 700; }
+  .lane-track { position: relative; height: 44px; border-radius: 8px; background: repeating-linear-gradient(90deg, rgba(255,255,255,.05) 0 40px, transparent 40px 80px), #8a6238; overflow: hidden; }
+  .finish { position: absolute; right: 0; top: 0; bottom: 0; width: 12px; background: repeating-conic-gradient(#fff 0 25%, #111 0 50%) 0 0 / 12px 12px; opacity: .9; }
+  .runner { position: absolute; top: 50%; left: 0; font-size: 2rem; line-height: 1; transform: translateY(-50%); will-change: left; }
+  .runner span { display: inline-block; transform: scaleX(-1); }
+  .place { position: absolute; right: 18px; top: 50%; transform: translateY(-50%); font-size: 1.3rem; }
+
+  /* Joueurs */
+  .seats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .seat { background: rgba(0,0,0,.22); border: 2px solid rgba(255,255,255,.12); border-radius: 14px; padding: 10px; display: flex; flex-direction: column; gap: 6px; min-height: 90px; }
+  .seat.me { border-color: rgba(232,194,106,.5); }
+  .seat.empty { align-items: center; justify-content: center; opacity: .45; font-style: italic; border-style: dashed; }
+  .seat.gone { opacity: .45; }
+  .seat-head { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .seat-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag { font-size: .65rem; background: var(--gold); color: #222; padding: 1px 6px; border-radius: 6px; margin-left: 4px; font-weight: 700; vertical-align: middle; }
+  .seat-bank { font-size: .85rem; color: var(--gold); white-space: nowrap; }
+  .seat-bets { font-size: .8rem; opacity: .9; }
+  .seat-status { font-size: .8rem; opacity: .9; }
+  .net-pos { color: #7ee2a2; font-weight: bold; } .net-neg { color: #ff9b9b; font-weight: bold; }
+
+  /* Contrôles */
+  .controls { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-bottom: 8px; min-height: 60px; }
+  .chips { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .chip { width: 56px; height: 56px; border-radius: 50%; border: 4px dashed rgba(255,255,255,.85); font-weight: bold; font-size: .95rem; color: #fff; cursor: pointer; box-shadow: 0 3px 6px rgba(0,0,0,.5); transition: transform .1s; }
+  .chip:hover:not(:disabled) { transform: translateY(-3px); }
+  .chip:disabled { opacity: .35; cursor: not-allowed; }
+  .c5 { background: #c0392b; } .c10 { background: #2471a3; } .c25 { background: #1e8449; } .c100 { background: #222; } .c500 { background: #7d3c98; }
+  .bet-line { font-size: 1rem; text-align: center; }
+  .bet-line b { color: var(--gold); }
+  .buttons { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  button.btn { padding: 11px 22px; font-size: 1rem; font-weight: 600; border-radius: 8px; cursor: pointer; border: 2px solid var(--gold); background: rgba(0,0,0,.35); color: var(--text); transition: background .15s; }
+  button.btn:hover:not(:disabled) { background: var(--gold); color: #222; }
+  button.btn.primary { background: var(--gold); color: #222; }
+  button.btn:disabled { opacity: .3; cursor: not-allowed; }
+  .hidden { display: none !important; }
+  .cheat { display: flex; gap: 8px; align-items: center; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
+  .cheat input { width: 130px; padding: 6px 10px; border-radius: 20px; border: 1px solid rgba(232,194,106,.5); background: rgba(0,0,0,.3); color: var(--text); text-align: center; text-transform: uppercase; outline: none; font-size: .85rem; }
+  .cheat input:focus { border-color: var(--gold); }
+  #cheat-msg { font-size: .85rem; color: var(--gold); min-width: 90px; }
+  footer { font-size: .7rem; opacity: .5; margin-top: 10px; text-align: center; }
+
+  /* Lobby */
+  .overlay { position: fixed; inset: 0; background: rgba(4,30,18,.92); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  .panel { background: var(--felt-dark); border: 2px solid var(--gold); border-radius: 16px; padding: 28px 24px; width: 100%; max-width: 400px; display: flex; flex-direction: column; gap: 14px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+  .panel h2 { font-family: Georgia, serif; color: var(--gold); font-size: 1.8rem; letter-spacing: 2px; }
+  .panel p { font-size: .9rem; opacity: .8; }
+  .panel input { padding: 12px; font-size: 1rem; border-radius: 8px; border: 2px solid rgba(232,194,106,.5); background: rgba(0,0,0,.35); color: var(--text); text-align: center; outline: none; width: 100%; }
+  .panel input:focus { border-color: var(--gold); }
+  .panel input#code-input { text-transform: uppercase; letter-spacing: 4px; }
+  .sep { display: flex; align-items: center; gap: 10px; opacity: .6; font-size: .8rem; }
+  .sep::before, .sep::after { content: ""; flex: 1; height: 1px; background: currentColor; }
+  .join-row { display: flex; gap: 8px; }
+  .join-row input { flex: 1; min-width: 0; }
+  .lobby-error { color: #ff9b9b; font-size: .9rem; min-height: 1.2em; }
+  .menu-link { color: var(--gold); font-size: .85rem; text-decoration: none; opacity: .85; }
+  .menu-link:hover { text-decoration: underline; }
+
+  @media (max-width: 760px) {
+    .seats { grid-template-columns: repeat(2, 1fr); }
+    .lane { grid-template-columns: 1fr; gap: 4px; }
+    .lane-track { height: 38px; }
+    .runner { font-size: 1.7rem; }
+  }
+  @media (max-width: 500px) {
+    .chip { width: 48px; height: 48px; font-size: .82rem; }
+    button.btn { padding: 10px 15px; font-size: .95rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Lobby -->
+<div class="overlay" id="lobby">
+  <div class="panel">
+    <h2>🏁 COURSE FOLLE</h2>
+    <p>Jusqu'à 4 joueurs parient sur la même course</p>
+    <input id="name-input" maxlength="14" placeholder="Votre pseudo">
+    <button class="btn primary" id="btn-create">Créer une table</button>
+    <div class="sep">ou rejoindre</div>
+    <div class="join-row">
+      <input id="code-input" maxlength="5" placeholder="CODE">
+      <button class="btn" id="btn-join">Rejoindre</button>
+    </div>
+    <div class="lobby-error" id="lobby-error"></div>
+    <a class="menu-link" href="index.html">← Menu des jeux</a>
+  </div>
+</div>
+
+<!-- Fin de connexion -->
+<div class="overlay hidden" id="ended">
+  <div class="panel">
+    <h2>Table fermée</h2>
+    <p id="ended-text">L'hôte a quitté la table.</p>
+    <button class="btn primary" onclick="location.href = location.pathname">Retour à l'accueil</button>
+  </div>
+</div>
+
+<header>
+  <h1>🏁 COURSE FOLLE</h1>
+  <div class="table-info">
+    <span class="pill">Table <b id="table-code">-----</b></span>
+    <button class="small-btn" id="btn-copy">Copier le lien</button>
+    <button class="small-btn" id="btn-leave">Quitter</button>
+    <a class="small-btn" href="index.html" id="btn-menu">Menu</a>
+  </div>
+</header>
+<p class="rules">Misez sur un ou plusieurs coureurs · Si votre coureur gagne, vous touchez mise × cote · La forme des coureurs change à chaque course</p>
+
+<main class="table">
+  <div class="message" id="message"></div>
+  <div class="submessage" id="submessage"></div>
+
+  <section class="track" id="track"></section>
+
+  <section class="controls">
+    <div id="bet-panel" class="controls hidden">
+      <div class="bet-line" id="sel-line"></div>
+      <div class="chips">
+        <button class="chip c5" data-v="5">5</button>
+        <button class="chip c10" data-v="10">10</button>
+        <button class="chip c25" data-v="25">25</button>
+        <button class="chip c100" data-v="100">100</button>
+        <button class="chip c500" data-v="500">500</button>
+      </div>
+      <div class="bet-line">Total misé : <b id="bet-total">0</b> €</div>
+      <div class="buttons">
+        <button class="btn" id="btn-clear">Effacer</button>
+        <button class="btn" id="btn-rebet">Mêmes paris</button>
+        <button class="btn primary" id="btn-ready">Prêt</button>
+        <button class="btn hidden" id="btn-start">Lancer sans attendre</button>
+      </div>
+    </div>
+    <div id="broke-panel" class="buttons hidden">
+      <button class="btn primary" id="btn-refill">Recharger 1000 €</button>
+    </div>
+  </section>
+
+  <section class="seats" id="seats"></section>
+</main>
+<div class="cheat">
+  <input id="cheat-input" maxlength="12" placeholder="Code triche" autocomplete="off">
+  <button class="small-btn" id="btn-cheat">OK</button>
+  <span id="cheat-msg"></span>
+</div>
+<footer>Jeu gratuit, sans argent réel. Raccourcis : 1 à 6 = choisir un coureur · Entrée = prêt</footer>
+
+<script>
+(() => {
+  // ================== Constantes & utilitaires ==================
+  const RUNNERS = [
+    { name: 'Éclair',    emoji: '🐎', color: '#c0392b' },
+    { name: 'Turbo',     emoji: '🐆', color: '#2471a3' },
+    { name: 'Carotte',   emoji: '🐇', color: '#1e8449' },
+    { name: 'Sprinteur', emoji: '🐕', color: '#d68910' },
+    { name: 'Tranquille',emoji: '🐢', color: '#7d3c98' },
+    { name: 'Crête',     emoji: '🐓', color: '#17a589' },
+  ];
+  const N = RUNNERS.length;
+  const CHIPS = [5, 10, 25, 100, 500];
+  const START_BANK = 1000, MAX_SEATS = 4, TICK_MS = 100;
+  const BROKER = 'wss://broker.hivemq.com:8884/mqtt';
+  const TOPIC_ROOT = 'course-v1/';
+  const $ = id => document.getElementById(id);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const sum = a => a.reduce((x, y) => x + y, 0);
+  const zeros = () => Array(N).fill(0);
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} }
+  };
+  const cleanName = n => (String(n || '').replace(/[<>]/g, '').trim().slice(0, 14)) || 'Joueur';
+  const fmtOdds = o => 'x' + (Math.round(o * 10) / 10).toFixed(1).replace('.', ',');
+
+  // ================== Réseau ==================
+  let client = null, isHost = false, tableCode = '', T = '';
+  const myId = 'p' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+  const lastSeen = new Map();
+  let lastHostMsg = 0, lastRejoin = 0, wasSeated = false;
+  const decoder = new TextDecoder();
+
+  function genCode() {
+    const A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    let s = ''; for (let i = 0; i < 5; i++) s += A[Math.floor(Math.random() * A.length)];
+    return s;
+  }
+  function myName() { return cleanName($('name-input').value); }
+  function savedBank() { const b = parseInt(store.get('bj-bank', START_BANK), 10); return isNaN(b) || b < 0 ? START_BANK : b; }
+  function lobbyError(t) { $('lobby-error').textContent = t; setLobbyBusy(false); }
+  function setLobbyBusy(b) { $('btn-create').disabled = b; $('btn-join').disabled = b; }
+
+  function connectBroker(will, onConnect) {
+    if (typeof mqtt === 'undefined') { lobbyError('Impossible de charger le module réseau. Vérifiez votre connexion internet.'); return false; }
+    client = mqtt.connect(BROKER, { clientId: 'cf_' + myId, clean: true, keepalive: 20, connectTimeout: 10000, reconnectPeriod: 2000, will });
+    client.on('connect', onConnect);
+    client.on('error', () => { if (!view) lobbyError('Le serveur de jeu ne répond pas. Réessayez dans un instant.'); });
+    client.on('offline', () => { if (!view) lobbyError('Pas de connexion au serveur de jeu. Réessayez.'); });
+    return true;
+  }
+  function parse(payload) { try { return JSON.parse(decoder.decode(payload)); } catch { return null; } }
+
+  function createTable() {
+    setLobbyBusy(true); $('lobby-error').textContent = 'Création de la table…';
+    tableCode = genCode(); T = TOPIC_ROOT + tableCode; isHost = true;
+    const ok = connectBroker({ topic: T + '/state', payload: JSON.stringify({ type: 'closed' }), qos: 1, retain: false }, () => {
+      client.subscribe(T + '/act', { qos: 1 }, err => {
+        if (err) return lobbyError('Erreur de connexion au serveur.');
+        if (!S) {
+          initHost();
+          handle(myId, { type: 'join', name: myName(), bank: savedBank() });
+          enterTable();
+          setInterval(hostTick, 3000);
+        } else broadcast();
+      });
+    });
+    if (!ok) return;
+    client.on('message', (topic, payload) => {
+      const d = parse(payload);
+      if (!d || typeof d.from !== 'string' || d.from === myId) return;
+      lastSeen.set(d.from, Date.now());
+      if (d.type === 'ping') return;
+      handle(d.from, d);
+    });
+  }
+
+  function hostTick() {
+    publishState();
+    const now = Date.now();
+    for (const s of S.seats) if (s && !s.host && s.connected && now - (lastSeen.get(s.id) || 0) > 30000) onLeave(s.id);
+  }
+
+  function joinTable(code) {
+    code = code.trim().toUpperCase();
+    if (code.length !== 5) return lobbyError('Le code fait 5 caractères.');
+    setLobbyBusy(true); $('lobby-error').textContent = 'Connexion…';
+    tableCode = code; T = TOPIC_ROOT + code;
+    let timeout = null;
+    const ok = connectBroker({ topic: T + '/act', payload: JSON.stringify({ type: 'leave', from: myId }), qos: 1, retain: false }, () => {
+      client.subscribe(T + '/state', { qos: 1 }, err => {
+        if (err) return lobbyError('Erreur de connexion au serveur.');
+        sendJoin();
+        if (!view) {
+          $('lobby-error').textContent = 'Recherche de la table…';
+          clearTimeout(timeout);
+          timeout = setTimeout(() => { if (!view) lobbyError("Table introuvable. Vérifiez le code et que l'hôte a bien la page ouverte."); }, 9000);
+        }
+      });
+    });
+    if (!ok) return;
+    client.on('message', (topic, payload) => {
+      const d = parse(payload);
+      if (!d) return;
+      lastHostMsg = Date.now();
+      if (d.type === 'closed') { if (view) showEnded("L'hôte a quitté la table."); }
+      else if (d.type === 'full') { if (d.to === myId) { clearTimeout(timeout); lobbyError('La table est complète (4 joueurs).'); client.end(true); } }
+      else if (d.type === 'state') {
+        clearTimeout(timeout);
+        const seated = d.state.seats.some(s => s && s.id === myId);
+        if (!view && !seated) return;
+        if (!view) enterTable();
+        $('ended').classList.add('hidden');
+        if (seated) wasSeated = true;
+        else if (wasSeated && Date.now() - lastRejoin > 5000) { lastRejoin = Date.now(); sendJoin(); }
+        renderState(d.state);
+      }
+    });
+    setInterval(() => {
+      if (client && client.connected) client.publish(T + '/act', JSON.stringify({ type: 'ping', from: myId }));
+      if (view && Date.now() - lastHostMsg > 25000) showEnded("Connexion perdue avec l'hôte (page fermée ou téléphone en veille).");
+    }, 4000);
+  }
+
+  function sendJoin() { send({ type: 'join', name: myName(), bank: savedBank() }); }
+  function send(action) {
+    if (isHost) handle(myId, action);
+    else if (client) client.publish(T + '/act', JSON.stringify({ ...action, from: myId }), { qos: 1 });
+  }
+  function enterTable() {
+    $('lobby').classList.add('hidden');
+    $('table-code').textContent = tableCode;
+    store.set('bj-name', myName());
+    history.replaceState(null, '', location.pathname + '?table=' + tableCode);
+  }
+  function showEnded(t) { $('ended-text').textContent = t; $('ended').classList.remove('hidden'); }
+
+  // ================== Moteur de course ==================
+  // Chaque tick, un coureur avance de : forme × hasard (+ sprint ou trébuchement de temps en temps).
+  function stepFor(strength) {
+    let v = strength * (0.2 + Math.random() * 1.6) * 1.15;
+    const r = Math.random();
+    if (r < 0.06) v *= 2.2;        // sprint
+    else if (r < 0.11) v *= 0.15;  // trébuche
+    return v;
+  }
+  // Simule une course. Renvoie l'ordre d'arrivée (et les positions tick par tick si frames = true).
+  function simulate(strengths, withFrames) {
+    const pos = zeros(), finish = Array(N).fill(Infinity), frames = withFrames ? [pos.slice()] : null;
+    for (let t = 1; t <= 400 && finish.some(f => f === Infinity); t++) {
+      for (let i = 0; i < N; i++) {
+        if (finish[i] !== Infinity) continue;
+        const prev = pos[i], next = prev + stepFor(strengths[i]);
+        if (next >= 100) { finish[i] = t - 1 + (100 - prev) / (next - prev); pos[i] = 100; }
+        else pos[i] = next;
+      }
+      if (frames) frames.push(pos.map(p => Math.round(p * 10) / 10));
+    }
+    const order = [...Array(N).keys()].sort((a, b) => finish[a] - finish[b]);
+    return { order, frames };
+  }
+  // Cotes calculées en simulant la course des milliers de fois (avec une petite marge pour la maison).
+  function computeOdds(strengths) {
+    const wins = zeros(), SIMS = 3000;
+    for (let k = 0; k < SIMS; k++) wins[simulate(strengths, false).order[0]]++;
+    return wins.map(w => {
+      const p = w / SIMS;
+      if (p <= 0) return 50;
+      return Math.min(50, Math.max(1.1, Math.floor((0.92 / p) * 10) / 10));
+    });
+  }
+
+  // ================== Logique de l'hôte ==================
+  let S = null, strengths = [], raceId = 0;
+
+  function initHost() {
+    S = { phase: 'bet', seats: Array(MAX_SEATS).fill(null), odds: zeros(), race: null, podium: null, msg: 'Placez vos paris' };
+    newForm();
+  }
+  function newForm() {
+    strengths = RUNNERS.map(() => 0.94 + Math.random() * 0.12); // petits écarts de forme : cotes entre ~x2 et ~x20
+    S.odds = computeOdds(strengths);
+  }
+  const seated = () => S.seats.filter(Boolean);
+
+  function publishState() {
+    if (client && client.connected) client.publish(T + '/state', JSON.stringify({ type: 'state', state: S }), { qos: 1 });
+    return S;
+  }
+  function broadcast() { renderState(JSON.parse(JSON.stringify(publishState()))); }
+
+  function handle(from, a) {
+    if (!a || typeof a !== 'object') return;
+    const i = S.seats.findIndex(s => s && s.id === from);
+    const s = S.seats[i];
+
+    if (a.type === 'leave') { onLeave(from); return; }
+    if (a.type === 'join') {
+      if (s) s.connected = true;
+      else {
+        const free = S.seats.findIndex(x => !x);
+        if (free < 0) { client.publish(T + '/state', JSON.stringify({ type: 'full', to: from })); return; }
+        const bank = Math.max(0, Math.min(1e9, parseInt(a.bank, 10) || START_BANK));
+        S.seats[free] = { id: from, name: cleanName(a.name), bank, bets: zeros(), lastBets: zeros(), ready: false, net: null, connected: true, host: from === myId, inRace: false };
+      }
+      broadcast(); return;
+    }
+    if (!s) return;
+
+    const betting = S.phase === 'bet';
+    switch (a.type) {
+      case 'bet': {
+        const v = +a.v, h = +a.horse;
+        if (!betting || s.ready || !CHIPS.includes(v) || v > s.bank || !(h >= 0 && h < N)) return;
+        s.bank -= v; s.bets[h] += v; break;
+      }
+      case 'clear':
+        if (!betting || s.ready) return;
+        s.bank += sum(s.bets); s.bets = zeros(); break;
+      case 'rebet': {
+        if (!betting || s.ready) return;
+        const need = sum(s.lastBets);
+        if (!need) return;
+        s.bank += sum(s.bets); s.bets = zeros();
+        if (need <= s.bank) { s.bank -= need; s.bets = s.lastBets.slice(); }
+        break;
+      }
+      case 'ready':
+        if (!betting || !sum(s.bets)) return;
+        s.ready = true; broadcast(); checkStart(); return;
+      case 'unready':
+        if (!betting) return;
+        s.ready = false; break;
+      case 'start':
+        if (from !== myId || !betting || !seated().some(x => x.ready)) return;
+        startRace(); return;
+      case 'cheat':
+        if (String(a.code || '').trim().toUpperCase() !== 'GTA6') return;
+        s.bank += 1000; break;
+      case 'refill':
+        if (!betting || s.bank + sum(s.bets) >= 5) return;
+        s.bank = START_BANK; break;
+      default: return;
+    }
+    broadcast();
+  }
+
+  function onLeave(id) {
+    const i = S.seats.findIndex(s => s && s.id === id);
+    if (i < 0) return;
+    if (S.phase === 'bet') { S.seats[i] = null; broadcast(); checkStart(); return; }
+    S.seats[i].connected = false; // ses paris restent en jeu jusqu'à la fin de la course
+    broadcast();
+  }
+
+  function checkStart() {
+    const list = seated();
+    if (S.phase === 'bet' && list.length && list.every(s => s.ready)) startRace();
+  }
+
+  async function startRace() {
+    for (const s of seated()) {
+      if (s.ready) { s.lastBets = s.bets.slice(); s.inRace = true; }
+      else { s.bank += sum(s.bets); s.bets = zeros(); s.inRace = false; }
+      s.ready = false; s.net = null;
+    }
+    const { order, frames } = simulate(strengths, true);
+    S.phase = 'race'; S.podium = null;
+    S.race = { id: ++raceId, frames, tickMs: TICK_MS };
+    S.msg = "C'est parti ! 🏁";
+    broadcast();
+    await sleep(frames.length * TICK_MS + 1500);
+
+    const w = order[0];
+    for (const s of seated()) {
+      if (!s.inRace) continue;
+      const pay = Math.floor(s.bets[w] * S.odds[w]);
+      s.bank += pay; s.net = pay - sum(s.bets);
+    }
+    S.phase = 'end'; S.podium = order.slice(0, 3);
+    S.msg = `🏆 ${RUNNERS[w].emoji} ${RUNNERS[w].name} gagne la course !`;
+    broadcast();
+    setTimeout(newRound, 7000);
+  }
+
+  function newRound() {
+    S.seats = S.seats.map(s => (s && s.connected) ? s : null);
+    for (const s of seated()) { s.bets = zeros(); s.ready = false; s.net = null; s.inRace = false; }
+    newForm();
+    S.phase = 'bet'; S.race = null; S.podium = null; S.msg = 'Placez vos paris';
+    broadcast();
+  }
+
+  // ================== Affichage ==================
+  let view = null, sel = 0;
+  let anim = { id: null, start: 0, frames: null, tick: TICK_MS, running: false };
+  const lanes = [];
+
+  function buildTrack() {
+    const track = $('track');
+    RUNNERS.forEach((r, i) => {
+      const lane = document.createElement('div');
+      lane.className = 'lane';
+      lane.innerHTML = `
+        <div class="lane-info">
+          <div class="lane-top">
+            <span class="num" style="background:${r.color}">${i + 1}</span>
+            <span class="hname">${r.emoji} ${r.name}</span>
+            <span class="odds"></span>
+          </div>
+          <div class="lane-bets"></div>
+        </div>
+        <div class="lane-track"><div class="finish"></div><div class="place"></div><div class="runner"><span>${r.emoji}</span></div></div>`;
+      lane.addEventListener('click', () => selectRunner(i));
+      track.appendChild(lane);
+      lanes.push({ el: lane, odds: lane.querySelector('.odds'), bets: lane.querySelector('.lane-bets'), runner: lane.querySelector('.runner'), place: lane.querySelector('.place') });
+    });
+  }
+  function setRunners(positions) {
+    positions.forEach((p, i) => { lanes[i].runner.style.left = `calc(${p}% - ${p * 0.44}px)`; });
+  }
+  function selectRunner(i) {
+    if (!view || view.phase !== 'bet') return;
+    sel = i; renderState(view);
+  }
+
+  function startAnim(race) {
+    anim = { id: race.id, start: performance.now(), frames: race.frames, tick: race.tickMs, running: true };
+    requestAnimationFrame(stepAnim);
+  }
+  function stepAnim(now) {
+    if (!anim.running) return;
+    const F = anim.frames, t = (now - anim.start) / anim.tick;
+    const k = Math.floor(t), f = t - k;
+    const a = F[Math.min(k, F.length - 1)], b = F[Math.min(k + 1, F.length - 1)];
+    setRunners(a.map((x, i) => x + (b[i] - x) * f));
+    if (k < F.length - 1) requestAnimationFrame(stepAnim);
+    else { anim.running = false; if (view) renderState(view); }
+  }
+
+  function div(cls, text) { const d = document.createElement('div'); if (cls) d.className = cls; if (text !== undefined) d.textContent = text; return d; }
+  function span(cls, text) { const d = document.createElement('span'); if (cls) d.className = cls; d.textContent = text; return d; }
+
+  function renderState(V) {
+    view = V;
+    const meIdx = V.seats.findIndex(s => s && s.id === myId);
+    const me = V.seats[meIdx];
+    if (me) {
+      if (V.phase === 'bet') store.set('bj-bank', me.bank + sum(me.bets));
+      else if (V.phase === 'end') store.set('bj-bank', me.bank);
+    }
+
+    // Animation de la course
+    if (V.race && V.race.id !== anim.id) startAnim(V.race);
+    if (V.phase === 'bet') { anim.running = false; anim.id = null; setRunners(zeros()); }
+    // L'animation est finie quand sa durée est écoulée (même si l'onglet a ralenti l'affichage)
+    const animLeft = anim.frames && anim.id !== null ? (anim.frames.length - 1) * anim.tick - (performance.now() - anim.start) : 0;
+    if (V.phase === 'end' && animLeft > 0) { clearTimeout(anim.wake); anim.wake = setTimeout(() => view && renderState(view), animLeft + 50); }
+    const showResult = V.phase === 'end' && animLeft <= 0;
+    if (showResult) { anim.running = false; if (V.race) setRunners(V.race.frames[V.race.frames.length - 1]); }
+
+    // Messages
+    let msg = V.msg, sub = '';
+    if (V.phase === 'end' && !showResult) msg = 'Photo-finish…';
+    if (V.phase === 'bet') {
+      const list = V.seats.filter(Boolean), r = list.filter(s => s.ready).length;
+      sub = `${r}/${list.length} joueur${list.length > 1 ? 's' : ''} prêt${r > 1 ? 's' : ''}`;
+      if (list.length === 1) sub += ' · partagez le code pour inviter des amis';
+    } else if (V.phase === 'race' && me && !me.inRace) sub = 'Vous parierez à la prochaine course';
+    else if (showResult) sub = 'Prochaine course dans quelques secondes…';
+    $('message').textContent = msg;
+    $('submessage').textContent = sub;
+
+    // Couloirs
+    const medals = ['🥇', '🥈', '🥉'];
+    lanes.forEach((L, i) => {
+      L.odds.textContent = V.odds[i] ? fmtOdds(V.odds[i]) : '';
+      L.el.classList.toggle('selectable', V.phase === 'bet' && !!me && !me.ready);
+      L.el.classList.toggle('selected', V.phase === 'bet' && !!me && sel === i);
+      const place = showResult && V.podium ? V.podium.indexOf(i) : -1;
+      L.el.classList.toggle('winner', place === 0);
+      L.place.textContent = place >= 0 ? medals[place] : '';
+      L.bets.innerHTML = '';
+      V.seats.forEach(s => {
+        if (s && s.bets[i] > 0) L.bets.appendChild(span('lb' + (s.id === myId ? ' mine' : ''), `${s.name} ${s.bets[i]} €`));
+      });
+    });
+
+    // Joueurs
+    const seatsEl = $('seats'); seatsEl.innerHTML = '';
+    V.seats.forEach((s, si) => {
+      if (!s) { seatsEl.appendChild(div('seat empty', 'Place libre')); return; }
+      const box = div('seat' + (si === meIdx ? ' me' : '') + (s.connected ? '' : ' gone'));
+      const head = div('seat-head');
+      const nm = div('seat-name'); nm.textContent = s.name;
+      if (si === meIdx) nm.appendChild(span('tag', 'VOUS'));
+      if (s.host) nm.appendChild(span('tag', 'HÔTE'));
+      head.appendChild(nm);
+      head.appendChild(span('seat-bank', (showResult || V.phase !== 'end' || !s.inRace ? s.bank : s.bank - (s.net || 0) - sum(s.bets)) + ' €'));
+      box.appendChild(head);
+      const bets = s.bets.map((b, i) => b ? `${RUNNERS[i].emoji} ${b} €` : null).filter(Boolean);
+      box.appendChild(div('seat-bets', bets.length ? bets.join(' · ') : 'Aucun pari'));
+      const st = div('seat-status');
+      if (!s.connected) st.textContent = 'Déconnecté';
+      else if (V.phase === 'bet') st.textContent = s.ready ? '✅ Prêt' : 'Choisit ses paris…';
+      else if (showResult && s.net !== null && s.net !== undefined) {
+        st.appendChild(span(s.net > 0 ? 'net-pos' : s.net < 0 ? 'net-neg' : '', s.net > 0 ? `+${s.net} €` : s.net < 0 ? `${s.net} €` : '±0 €'));
+      } else if (!s.inRace) st.textContent = 'Attend la prochaine course';
+      else st.textContent = '🏇 Course en cours';
+      box.appendChild(st);
+      seatsEl.appendChild(box);
+    });
+
+    // Contrôles
+    const betting = V.phase === 'bet' && me;
+    const broke = betting && me.bank + sum(me.bets) < 5;
+    $('bet-panel').classList.toggle('hidden', !betting || broke);
+    $('broke-panel').classList.toggle('hidden', !broke);
+    if (betting && !broke) {
+      const r = RUNNERS[sel];
+      $('sel-line').innerHTML = '';
+      $('sel-line').append('Coureur choisi : ', Object.assign(document.createElement('b'), { textContent: `${r.emoji} ${r.name} (${fmtOdds(V.odds[sel])})` }), ' · cliquez sur un couloir pour changer');
+      $('bet-total').textContent = sum(me.bets);
+      document.querySelectorAll('.chip').forEach(ch => ch.disabled = me.ready || +ch.dataset.v > me.bank);
+      $('btn-clear').disabled = me.ready || !sum(me.bets);
+      const need = sum(me.lastBets);
+      $('btn-rebet').disabled = me.ready || !need || need > me.bank + sum(me.bets);
+      $('btn-ready').disabled = !sum(me.bets);
+      $('btn-ready').textContent = me.ready ? 'Annuler' : 'Prêt';
+      $('btn-ready').classList.toggle('primary', !me.ready);
+      const list = V.seats.filter(Boolean);
+      $('btn-start').classList.toggle('hidden', !(isHost && list.some(s => s.ready) && !list.every(s => s.ready)));
+    }
+  }
+
+  // ================== Événements ==================
+  buildTrack();
+  setRunners(zeros());
+  $('name-input').value = store.get('bj-name', '');
+  const urlCode = new URLSearchParams(location.search).get('table');
+  if (urlCode) $('code-input').value = urlCode.toUpperCase();
+
+  function needName() {
+    if (!$('name-input').value.trim()) { $('lobby-error').textContent = 'Choisissez un pseudo.'; $('name-input').focus(); return true; }
+    return false;
+  }
+  $('btn-create').onclick = () => { if (!needName()) createTable(); };
+  $('btn-join').onclick = () => { if (!needName()) joinTable($('code-input').value); };
+  $('code-input').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-join').click(); });
+  $('name-input').addEventListener('keydown', e => { if (e.key === 'Enter') (urlCode ? $('btn-join') : $('btn-create')).click(); });
+
+  $('btn-copy').onclick = () => {
+    const link = location.origin + location.pathname + '?table=' + tableCode;
+    const done = () => { $('btn-copy').textContent = 'Lien copié ✓'; setTimeout(() => $('btn-copy').textContent = 'Copier le lien', 1800); };
+    if (navigator.clipboard) navigator.clipboard.writeText(link).then(done, () => prompt('Lien à partager :', link));
+    else prompt('Lien à partager :', link);
+  };
+  function confirmLeave() {
+    const others = view && view.seats.filter(s => s && s.id !== myId).length;
+    if (isHost && others && !confirm('Vous êtes l\'hôte : quitter fermera la table pour tout le monde. Continuer ?')) return false;
+    sayGoodbye(); return true;
+  }
+  $('btn-leave').onclick = () => { if (confirmLeave()) location.href = location.pathname; };
+  $('btn-menu').onclick = e => { if (!confirmLeave()) e.preventDefault(); };
+
+  document.querySelectorAll('.chip').forEach(ch => ch.addEventListener('click', () => send({ type: 'bet', horse: sel, v: +ch.dataset.v })));
+  $('btn-clear').onclick = () => send({ type: 'clear' });
+  $('btn-rebet').onclick = () => send({ type: 'rebet' });
+  $('btn-ready').onclick = () => {
+    const me = view && view.seats.find(s => s && s.id === myId);
+    send({ type: me && me.ready ? 'unready' : 'ready' });
+  };
+  $('btn-start').onclick = () => send({ type: 'start' });
+  $('btn-refill').onclick = () => send({ type: 'refill' });
+  function useCheat() {
+    const code = $('cheat-input').value.trim().toUpperCase();
+    if (!code) return;
+    const ok = code === 'GTA6';
+    if (ok) send({ type: 'cheat', code });
+    $('cheat-msg').textContent = ok ? '+1000 € 🤑' : 'Code invalide';
+    $('cheat-input').value = '';
+    setTimeout(() => $('cheat-msg').textContent = '', 2500);
+  }
+  $('btn-cheat').onclick = useCheat;
+  $('cheat-input').addEventListener('keydown', e => { if (e.key === 'Enter') useCheat(); });
+
+  document.addEventListener('keydown', e => {
+    if (!view || e.target.tagName === 'INPUT') return;
+    const n = parseInt(e.key, 10);
+    if (n >= 1 && n <= N) selectRunner(n - 1);
+    if (e.key === 'Enter' && !$('bet-panel').classList.contains('hidden') && !$('btn-ready').disabled) { e.preventDefault(); $('btn-ready').click(); }
+  });
+
+  function sayGoodbye() {
+    if (!client || !client.connected) return;
+    try {
+      if (isHost) client.publish(T + '/state', JSON.stringify({ type: 'closed' }));
+      else client.publish(T + '/act', JSON.stringify({ type: 'leave', from: myId }));
+    } catch {}
+  }
+  window.addEventListener('pagehide', sayGoodbye);
+})();
+</script>
+</body>
+</html>
