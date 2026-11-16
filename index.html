@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Blackjack entre amis</title>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <style>
   :root {
     --felt: #0d5c3a;
@@ -104,6 +104,13 @@
   button.btn.primary { background: var(--gold); color: #222; }
   button.btn:disabled { opacity: .3; cursor: not-allowed; }
   .hidden { display: none !important; }
+  .cheat { display: flex; gap: 8px; align-items: center; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
+  .cheat input {
+    width: 130px; padding: 6px 10px; border-radius: 20px; border: 1px solid rgba(232,194,106,.5);
+    background: rgba(0,0,0,.3); color: var(--text); text-align: center; text-transform: uppercase; outline: none; font-size: .85rem;
+  }
+  .cheat input:focus { border-color: var(--gold); }
+  #cheat-msg { font-size: .85rem; color: var(--gold); min-width: 90px; }
   footer { font-size: .7rem; opacity: .5; margin-top: 10px; text-align: center; }
 
   /* Lobby */
@@ -215,6 +222,11 @@
     </div>
   </section>
 </main>
+<div class="cheat">
+  <input id="cheat-input" maxlength="12" placeholder="Code triche" autocomplete="off">
+  <button class="small-btn" id="btn-cheat">OK</button>
+  <span id="cheat-msg"></span>
+</div>
 <footer>Jeu gratuit, sans argent réel. Raccourcis : H = carte · S = rester · D = doubler · P = séparer · Entrée = prêt</footer>
 
 <script>
@@ -224,7 +236,9 @@
   const RANKS = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
   const CHIPS = [5, 10, 25, 100, 500];
   const NUM_DECKS = 6, START_BANK = 1000, MAX_SEATS = 4, TURN_MS = 30000;
-  const PREFIX = 'bjfr-table-v1-';
+  // Serveur relais public et gratuit (MQTT over WebSocket). Tout le monde doit utiliser le même.
+  const BROKER = 'wss://broker.hivemq.com:8884/mqtt';
+  const TOPIC_ROOT = 'bjfr-v2/';
   const $ = id => document.getElementById(id);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -246,8 +260,11 @@
   const cleanName = n => (String(n || '').replace(/[<>]/g, '').trim().slice(0, 14)) || 'Joueur';
 
   // ================== Réseau ==================
-  let peer = null, isHost = false, myId = null, hostConn = null, tableCode = '';
-  const conns = new Map();
+  let client = null, isHost = false, tableCode = '', T = '';
+  const myId = 'p' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+  const lastSeen = new Map();
+  let lastHostMsg = 0, lastRejoin = 0, wasSeated = false;
+  const decoder = new TextDecoder();
 
   function genCode() {
     const A = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -259,55 +276,95 @@
   function lobbyError(t) { $('lobby-error').textContent = t; setLobbyBusy(false); }
   function setLobbyBusy(b) { $('btn-create').disabled = b; $('btn-join').disabled = b; }
 
-  function createTable(tries = 0) {
+  function connectBroker(will, onConnect) {
+    if (typeof mqtt === 'undefined') { lobbyError('Impossible de charger le module réseau. Vérifiez votre connexion internet.'); return false; }
+    client = mqtt.connect(BROKER, {
+      clientId: 'bjfr_' + myId, clean: true, keepalive: 20,
+      connectTimeout: 10000, reconnectPeriod: 2000, will
+    });
+    client.on('connect', onConnect);
+    client.on('error', () => { if (!view) lobbyError('Le serveur de jeu ne répond pas. Réessayez dans un instant.'); });
+    client.on('offline', () => { if (!view) lobbyError('Pas de connexion au serveur de jeu. Réessayez.'); });
+    return true;
+  }
+  function parse(payload) { try { return JSON.parse(decoder.decode(payload)); } catch { return null; } }
+
+  function createTable() {
     setLobbyBusy(true); $('lobby-error').textContent = 'Création de la table…';
-    const code = genCode();
-    peer = new Peer(PREFIX + code);
-    peer.on('open', id => {
-      myId = id; isHost = true; tableCode = code;
-      initHost();
-      handle(myId, { type: 'join', name: myName(), bank: savedBank() });
-      enterTable();
+    tableCode = genCode(); T = TOPIC_ROOT + tableCode; isHost = true;
+    const ok = connectBroker({ topic: T + '/state', payload: JSON.stringify({ type: 'closed' }), qos: 1, retain: false }, () => {
+      client.subscribe(T + '/act', { qos: 1 }, err => {
+        if (err) return lobbyError('Erreur de connexion au serveur.');
+        if (!S) {
+          initHost();
+          handle(myId, { type: 'join', name: myName(), bank: savedBank() });
+          enterTable();
+          setInterval(hostTick, 3000);
+        } else broadcast();
+      });
     });
-    peer.on('connection', conn => {
-      conn.on('open', () => conns.set(conn.peer, conn));
-      conn.on('data', d => handle(conn.peer, d));
-      const gone = () => { if (conns.get(conn.peer) === conn) { conns.delete(conn.peer); onLeave(conn.peer); } };
-      conn.on('close', gone);
-      conn.on('error', gone);
+    if (!ok) return;
+    client.on('message', (topic, payload) => {
+      const d = parse(payload);
+      if (!d || typeof d.from !== 'string' || d.from === myId) return;
+      lastSeen.set(d.from, Date.now());
+      if (d.type === 'ping') return;
+      handle(d.from, d);
     });
-    peer.on('disconnected', () => { try { peer.reconnect(); } catch {} });
-    peer.on('error', err => {
-      if (err.type === 'unavailable-id' && tries < 5) { peer.destroy(); createTable(tries + 1); }
-      else if (!myId) lobbyError('Impossible de créer la table (' + err.type + ').');
-    });
+  }
+
+  function hostTick() {
+    publishState(); // battement de cœur : les invités savent que l'hôte est toujours là
+    const now = Date.now();
+    for (const s of S.seats) if (s && !s.host && s.connected && now - (lastSeen.get(s.id) || 0) > 30000) onLeave(s.id);
   }
 
   function joinTable(code) {
     code = code.trim().toUpperCase();
     if (code.length !== 5) return lobbyError('Le code fait 5 caractères.');
     setLobbyBusy(true); $('lobby-error').textContent = 'Connexion…';
-    peer = new Peer();
-    peer.on('open', id => {
-      myId = id; tableCode = code;
-      hostConn = peer.connect(PREFIX + code, { reliable: true });
-      const timeout = setTimeout(() => { if (!view) lobbyError('Table introuvable ou injoignable.'); }, 12000);
-      hostConn.on('open', () => hostConn.send({ type: 'join', name: myName(), bank: savedBank() }));
-      hostConn.on('data', d => {
-        if (d.type === 'state') { clearTimeout(timeout); if (!view) enterTable(); renderState(d.state); }
-        else if (d.type === 'full') { clearTimeout(timeout); lobbyError('La table est complète (4 joueurs).'); peer.destroy(); }
+    tableCode = code; T = TOPIC_ROOT + code;
+    let timeout = null;
+    const ok = connectBroker({ topic: T + '/act', payload: JSON.stringify({ type: 'leave', from: myId }), qos: 1, retain: false }, () => {
+      client.subscribe(T + '/state', { qos: 1 }, err => {
+        if (err) return lobbyError('Erreur de connexion au serveur.');
+        sendJoin();
+        if (!view) {
+          $('lobby-error').textContent = 'Recherche de la table…';
+          clearTimeout(timeout);
+          timeout = setTimeout(() => { if (!view) lobbyError("Table introuvable. Vérifiez le code et que l'hôte a bien la page ouverte."); }, 9000);
+        }
       });
-      hostConn.on('close', () => { if (view) showEnded("L'hôte a quitté la table."); });
     });
-    peer.on('error', err => {
-      if (err.type === 'peer-unavailable') lobbyError('Table introuvable. Vérifiez le code.');
-      else if (!view) lobbyError('Erreur de connexion (' + err.type + ').');
+    if (!ok) return;
+    client.on('message', (topic, payload) => {
+      const d = parse(payload);
+      if (!d) return;
+      lastHostMsg = Date.now();
+      if (d.type === 'closed') { if (view) showEnded("L'hôte a quitté la table."); }
+      else if (d.type === 'full') { if (d.to === myId) { clearTimeout(timeout); lobbyError('La table est complète (4 joueurs).'); client.end(true); } }
+      else if (d.type === 'state') {
+        clearTimeout(timeout);
+        const seated = d.state.seats.some(s => s && s.id === myId);
+        if (!view && !seated) return; // pas encore assis : on attend notre place
+        if (!view) enterTable();
+        $('ended').classList.add('hidden'); // l'hôte est (re)venu après une coupure
+        if (seated) wasSeated = true;
+        else if (wasSeated && Date.now() - lastRejoin > 5000) { lastRejoin = Date.now(); sendJoin(); }
+        renderState(d.state);
+      }
     });
+    setInterval(() => {
+      if (client && client.connected) client.publish(T + '/act', JSON.stringify({ type: 'ping', from: myId }));
+      if (view && Date.now() - lastHostMsg > 25000) showEnded("Connexion perdue avec l'hôte (page fermée ou téléphone en veille).");
+    }, 4000);
   }
+
+  function sendJoin() { send({ type: 'join', name: myName(), bank: savedBank() }); }
 
   function send(action) {
     if (isHost) handle(myId, action);
-    else if (hostConn && hostConn.open) hostConn.send(action);
+    else if (client) client.publish(T + '/act', JSON.stringify({ ...action, from: myId }), { qos: 1 });
   }
 
   function enterTable() {
@@ -336,22 +393,24 @@
   function publicState() {
     return { ...S, dealer: S.dealer.map((c, i) => (i === 1 && S.holeHidden) ? { hidden: true } : c) };
   }
-  function broadcast() {
+  function publishState() {
     const p = publicState();
-    const msg = { type: 'state', state: p };
-    for (const c of conns.values()) if (c.open) { try { c.send(msg); } catch {} }
-    renderState(p);
+    if (client && client.connected) client.publish(T + '/state', JSON.stringify({ type: 'state', state: p }), { qos: 1 });
+    return p;
   }
+  function broadcast() { renderState(publishState()); }
 
   function handle(from, a) {
     if (!a || typeof a !== 'object') return;
     const i = S.seats.findIndex(s => s && s.id === from);
     const s = S.seats[i];
 
+    if (a.type === 'leave') { onLeave(from); return; }
     if (a.type === 'join') {
-      if (!s) {
+      if (s) s.connected = true;
+      else {
         const free = S.seats.findIndex(x => !x);
-        if (free < 0) { const c = conns.get(from); if (c) c.send({ type: 'full' }); return; }
+        if (free < 0) { client.publish(T + '/state', JSON.stringify({ type: 'full', to: from })); return; }
         const bank = Math.max(0, Math.min(1e9, parseInt(a.bank, 10) || START_BANK));
         S.seats[free] = { id: from, name: cleanName(a.name), bank, bet: 0, lastBet: 0, ready: false, hands: [], net: null, connected: true, host: from === myId };
       }
@@ -383,6 +442,9 @@
       case 'start':
         if (from !== myId || !betting || !seated().some(x => x.ready)) return;
         startRound(); return;
+      case 'cheat':
+        if (String(a.code || '').trim().toUpperCase() !== 'GTA6') return;
+        s.bank += 1000; break;
       case 'refill':
         if (!betting || s.bank + s.bet >= 5) return;
         s.bank = START_BANK; break;
@@ -653,8 +715,9 @@
     else prompt('Lien à partager :', link);
   };
   $('btn-leave').onclick = () => {
-    if (isHost && conns.size && !confirm('Vous êtes l\'hôte : quitter fermera la table pour tout le monde. Continuer ?')) return;
-    if (peer) peer.destroy();
+    const others = view && view.seats.filter(s => s && s.id !== myId).length;
+    if (isHost && others && !confirm('Vous êtes l\'hôte : quitter fermera la table pour tout le monde. Continuer ?')) return;
+    sayGoodbye();
     location.href = location.pathname;
   };
 
@@ -667,6 +730,17 @@
   };
   $('btn-start').onclick = () => send({ type: 'start' });
   $('btn-refill').onclick = () => send({ type: 'refill' });
+  function useCheat() {
+    const code = $('cheat-input').value.trim().toUpperCase();
+    if (!code) return;
+    const ok = code === 'GTA6';
+    if (ok) send({ type: 'cheat', code });
+    $('cheat-msg').textContent = ok ? '+1000 € 🤑' : 'Code invalide';
+    $('cheat-input').value = '';
+    setTimeout(() => $('cheat-msg').textContent = '', 2500);
+  }
+  $('btn-cheat').onclick = useCheat;
+  $('cheat-input').addEventListener('keydown', e => { if (e.key === 'Enter') useCheat(); });
   $('btn-hit').onclick = () => send({ type: 'hit' });
   $('btn-stand').onclick = () => send({ type: 'stand' });
   $('btn-double').onclick = () => send({ type: 'double' });
@@ -683,7 +757,14 @@
     if (k === 'enter' && !$('bet-panel').classList.contains('hidden') && !$('btn-ready').disabled) { e.preventDefault(); $('btn-ready').click(); }
   });
 
-  window.addEventListener('beforeunload', () => { if (peer) peer.destroy(); });
+  function sayGoodbye() {
+    if (!client || !client.connected) return;
+    try {
+      if (isHost) client.publish(T + '/state', JSON.stringify({ type: 'closed' }));
+      else client.publish(T + '/act', JSON.stringify({ type: 'leave', from: myId }));
+    } catch {}
+  }
+  window.addEventListener('pagehide', sayGoodbye);
 })();
 </script>
 </body>
